@@ -379,7 +379,7 @@ Some basic system packages need the locale and and fstab configured first.  The 
 This includes desktop, sound, and video drivers.
 
 ```
-pacstrap /mnt mesa xorg-server xorg-apps xorg-xinit xorg-twm xterm xorg-drivers alsa-utils pulseaudio pulseaudio-alsa xf86-input-synaptics xf86-input-keyboard xf86-input-mouse xf86-input-libinput b43-fwcutter polkit-gnome ttf-dejavu gnome-keyring xdg-user-dirs gvfs
+pacstrap /mnt mesa xorg-server xorg-apps xorg-xinit xorg-twm xterm xorg-drivers alsa-utils pulseaudio pulseaudio-alsa xf86-input-synaptics xf86-input-libinput b43-fwcutter polkit-gnome ttf-dejavu gnome-keyring xdg-user-dirs gvfs
 ```
 
 ### Install a desktop and window manager
@@ -518,6 +518,19 @@ EOF
 arch-chroot /mnt /bin/bash -c "pacman -Syy"
 ```
 
+### Add herecura to AUR list
+Adds lines from the command-line directly to the end of the existing file, then updates the repo list.
+```
+cat >> /mnt/etc/pacman.conf <<EOF
+
+[herecura]
+# packages built against core
+Server = https://repo.herecura.be/herecura/x86_64
+EOF
+
+arch-chroot /mnt /bin/bash -c "pacman -Syy"
+```
+
 ### Install pamac-aur and yay
 Requires the spooky-aur to be added already
 
@@ -552,15 +565,50 @@ The wheel user is usually allowed to perform sudo.
 echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
 ```
 
+# Add user
+* Enter the chroot
+```
+arch-chroot /mnt /bin/bash
+```
+
+* Create the username with group associations
+Set _myusername_ to the user you'd like to setup, and replace `/usr/bin/zsh` with the default shell you'd like for the user (e.g. `/bin/bash`).
+```
+useradd -m -g users -G adm,lp,wheel,power,audio,video -s /usr/bin/zsh myusername
+```
+Be aware that default installation of Arch Linux adds all users to the `users` group rather than creating a unique group for each user that matches their username (e.g. `-g myusername`).
+
+* Set the user password
+```
+passwd myusername
+```
+
 ## Install extra packages
-For example, if you need the Broadcom STA wireless driver for your WiFi chip, you can add `broadcom-wl-dkms` via a pacstrap command.
+At a minimum, you will need to install the resume support tool `uswsusp-git`.
+```
+arch-chroot /mnt /bin/bash
+su - myusername
+yay -Sy uswsusp-git
+exit
+exit
+```
+You can't run an AUR-enabled version of pacman as root, so you have to change to the new user once you're in the chroot.
+
+You should also install the firmware that's commonly missing during mkinitcpio but is available only in AUR.
+```
+arch-chroot /mnt /bin/bash
+su - myusername
+yay -Sy wd719x-firmware
+yay -Sy aic94xx-firmware
+exit
+exit
+```
+
+You can also install any additional drivers or packages you may want/need that come from AUR.  For example, if you need the Broadcom STA wireless driver for your WiFi chip, you can add `broadcom-wl-dkms` via a pacstrap command.
 
 ```
 pacstrap /mnt broadcom-wl-dkms
 ```
-
-This is the point where you might want to pick a desktop environment to use, and install other software.
-
 
 # Setup Initramfs
 The initramfs is loaded right at kernel start and is used to bootstrap the rest of the system.  The initramfs has the boot partition mounted, but is primarily controlled through the /etc/mkinitcpio.conf file.
@@ -619,10 +667,11 @@ This example corresponds to the `Lat2-Terminus16.psfu.gz` file.
 
 #### sd-encrypt
 `sd-encrypt`
-For our LVM on LUKS, must come before `sd-lvm2`, and after `systemd`.
+For our LVM on LUKS, must come before `sd-lvm2`, and after `systemd`. Must also be after `block`.
 Remove `encrypt`.
 
 Comes before the `sd-lvm2` because the devices must be decrypted before the VGs can be used.
+Comes after the `block` since the block devices must be available to select for decrypting.
 
 #### sd-lvm2
 `sd-lvm2`
@@ -639,8 +688,14 @@ This is used if hibernate/sleep support is enabled.  It will do nothing on the l
 
 Must come before the filesystem since it sets the state for the running system.
 
+This hook is provided by the `uswsusp-git` package available from AUR.
+
 ### Regenerate mkinitcpio
-The following regenerates the initramfs for all installed kernel presets.
+The following regenerates the initramfs for all installed kernel presets, and must be run from within the chroot.
+
+```
+arch-chroot /mnt /bin/bash
+```
 
 ```
 mkinitcpio -P
@@ -651,6 +706,8 @@ If you need to specify only a single preset configuration, you can do so with th
 ```
 mkinitcpio -p linux-zen
 ```
+
+Exit the chroot when you're done.
 
 ## Crypttab.initramfs
 Start by copying `/mnt/etc/crypttab` to `/mnt/etc/crypttab.initramfs`.
@@ -715,7 +772,9 @@ While any working version of the systemd-boot can be used, it's usually better t
 
 Be aware that an AUR capable installer is needed.
 ```
+su - myusername
 yay -Sy systemd-boot-pacman-hook
+exit
 ```
 This effectively adds the following pacman hook to `/etc/pacman.d/hooks/100-systemd-boot.hook`
 ```
@@ -771,7 +830,7 @@ title Arch Linux
 linux /vmlinuz-linux-zen
 initrd /intel-ucode.img
 initrd /initramfs-linux-zen.img
-options root=/dev/archdisk/root rootflags=x-systemd.device-timeout=0 resume=/dev/archdisk/swap apparmor=1 security=apparmor audit=1 no_console_suspend i915.enable_rc6=1 i915.enable_fbc=1 i915.lvds_downclock=1 i915.semaphores=1 quiet splash loglevel=3 rd.systemd.show_status=auto rd.udev.log_priority=3 vt.global_cursor_default=0 rw
+options root=/dev/archdisk/root rootflags=x-systemd.device-timeout=0 resume=/dev/archdisk/swap no_console_suspend i915.enable_rc6=1 i915.enable_fbc=1 i915.lvds_downclock=1 i915.semaphores=1 quiet splash loglevel=3 rd.systemd.show_status=auto rd.udev.log_priority=3 vt.global_cursor_default=0 rw
 ```
 
 The `title` is required, and is the text to show in the menu.
@@ -803,17 +862,11 @@ resume=/dev/archdisk/swap
 ```
 Hibernate/suspend/sleep support requires the mkinitcpio hook `uresume` and makes use of the `resume` command-line argument.  It should point to the LV swap partition.
 
-#### Security
-```
-apparmor=1 security=apparmor audit=1
-```
-Enables apparmor support.  One option for a security setting.
-
 #### Limited visible logging
 ```
 no_console_suspend quiet splash loglevel=3 rd.systemd.show_status=auto rd.udev.log_priority=3 vt.global_cursor_default=0
 ```
-If you choose to use an `sd-plymouth` mkinitcpio hook, which uses an interactive boot splash screen, you'll want to limit extraneous visible logging.
+If you choose to use an `sd-plymouth` mkinitcpio hook, which uses an interactive boot splash screen, you'll want to limit extraneous visible logging.  Do not add these lines unless you are sure of your boot working.
 
 #### Faster boot speed
 ```
@@ -827,24 +880,6 @@ Encrypted LUKS volumes that aren't necessary for boot should have entries added 
 If they contain a VG, the VG will be detected automatically and the fstab only needs to mount the LVs.
 
 The format is the same as the Crypttab.initramfs file described previously.
-
-# Add user
-* Enter the chroot
-```
-arch-chroot /mnt /bin/bash
-```
-
-* Create the username with group associations
-Set _myusername_ to the user you'd like to setup, and replace `/usr/bin/zsh` with the default shell you'd like for the user (e.g. `/bin/bash`).
-```
-useradd -m -g users -G adm,lp,wheel,power,audio,video -s /usr/bin/zsh myusername
-```
-Be aware that default installation of Arch Linux adds all users to the `users` group rather than creating a unique group for each user that matches their username (e.g. `-g myusername`).
-
-* Set the user password
-```
-passwd myusername
-```
 
 # Configure sleep/hibernate
 It's handled by systemd, acpid, laptop-tools, and tlp.
@@ -869,3 +904,5 @@ early writeout = y
 #splash = y
 ```
 The important values are the `resume device`, which needs to be the swap LV, `threads` which should be set to `y` to use multiple threads to suspend and resume faster, `early writeout` to `y`.
+If you have a lot of RAM, you'll probably also want to enable the `compress` option. For large RAM sizes the additional disk IO of writing an uncompressed state to the swap partition far outweighs the CPU time necessary to compress it.
+You will also need to enable `compress` if your swap partition size is not at least as large as your RAM size.
